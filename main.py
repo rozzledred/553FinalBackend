@@ -1,14 +1,17 @@
+import configparser
 import json
 import os
-import subprocess
-import re
 from datetime import datetime
 
+import dateutil.parser
 import psutil
-from flask import Flask, request
-from ping3 import ping, verbose_ping
+from file_read_backwards import FileReadBackwards
+from flask import Flask, request, current_app
+from ping3 import ping
 
 app = Flask(__name__)
+
+from dateutil.parser import parse
 
 
 def get_size(num_bytes):
@@ -25,13 +28,19 @@ def get_cpu_info():
     date_time = str(datetime.fromtimestamp(time_stamp))
 
     cpu_count = os.cpu_count()
-    cpu_load = psutil.cpu_percent(interval=None)
+    cpu_load_avg = psutil.cpu_percent(interval=None)
+    cpu_load = psutil.cpu_percent(interval=None, percpu=True)
+
+    last_boot = datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S")
 
     data = {
         "timestamp": date_time,
         "cpu_count": cpu_count,
-        "cpu_load": cpu_load,
+        "avg_cpu_load": cpu_load_avg,
+        "last_boot": last_boot,
+        "cpu_load_per_core": cpu_load
     }
+
     response = app.response_class(response=json.dumps(data),
                                   status=200,
                                   mimetype='application/json')
@@ -126,11 +135,24 @@ def get_network_info():
                 connection_dict['process_name'] = curr_process.name()
             connection_list.append(connection_dict)
 
+    current_users = psutil.users()
+    current_user_list = []
+
+    for user in current_users:
+        current_user_dict = dict()
+        current_user_dict['username'] = user.name
+        current_user_dict['terminal'] = user.terminal
+        current_user_dict['host'] = user.host
+        start_time = str(datetime.fromtimestamp(user.started))
+        current_user_dict['start_time'] = start_time
+        current_user_list.append(current_user_dict)
+
     data = {
         "timestamp": date_time,
         "avg_latency": avg_latency,
         "nic_data": nic_list,
-        "net_connections": connection_list
+        "net_connections": connection_list,
+        "connected_users": current_user_list
     }
     response = app.response_class(response=json.dumps(data),
                                   status=200,
@@ -152,7 +174,7 @@ def get_process_info():
         pinfo['cpu_time'] = sum(process.cpu_times()[:2])
         process_list.append(pinfo)
 
-    sorted_process_list = sorted(process_list, key=lambda procObj: procObj['cpu_time'], reverse=True)
+    sorted_process_list = sorted(process_list, key=lambda process_object: process_object['cpu_time'], reverse=True)
     sorted_process_list = sorted_process_list[:10]
     data = {
         "timestamp": date_time,
@@ -166,27 +188,59 @@ def get_process_info():
 
 
 @app.route("/logs_info")
-def get_logs_info():
+def post_logs_info():
     current_time = datetime.now()
     time_stamp = current_time.timestamp()
     date_time = str(datetime.fromtimestamp(time_stamp))
 
-    process_iterator = psutil.process_iter(['pid', 'name', 'username', 'cpu_percent'])
-    process_list = []
-    for process in process_iterator:
-        pinfo = process.as_dict(attrs=['pid', 'name', 'username', 'status'])
-        pinfo['vms'] = get_size(process.memory_info().vms)
-        pinfo['cpu_time'] = sum(process.cpu_times()[:2])
-        process_list.append(pinfo)
+    read_length = 10
 
-    sorted_process_list = sorted(process_list, key=lambda procObj: procObj['cpu_time'], reverse=True)
-    sorted_process_list = sorted_process_list[:10]
+    if request.args.get("length"):
+        read_length = int(request.args.get("length"))
+
+    config_path = current_app.config['file_path']
+
+    config_parser = configparser.ConfigParser()
+    config_parser.read(config_path)
+
+    log_list = []
+    for item in config_parser['Logs']:
+        curr_path = config_parser['Logs'][item]
+
+        curr_log_dict = dict()
+        curr_log_dict['log_name'] = curr_path
+
+        log_lines = []
+        line_count = 0
+        with FileReadBackwards(curr_path, encoding="utf-8") as frb:
+            for log_line in frb:
+                if line_count >= read_length:
+                    break
+                else:
+                    log_lines.append(log_line)
+                    line_count = line_count + 1
+
+        curr_log_dict['log'] = log_lines
+        log_list.append(curr_log_dict)
+
     data = {
         "timestamp": date_time,
-        "process_list": sorted_process_list
+        "config_paths": log_list
     }
 
     response = app.response_class(response=json.dumps(data),
                                   status=200,
                                   mimetype='application/json')
     return response
+
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument('-config', required=True)
+    args = parser.parse_args()
+    file_path = args.config
+
+    app.config["file_path"] = file_path
+    app.run(host='0.0.0.0', port=5000)
