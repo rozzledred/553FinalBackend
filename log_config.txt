@@ -1,0 +1,4 @@
+[Logs]
+log1 = /var/log/syslog
+log2 = /var/log/bootstrap.log
+log3 = /var/log/auth.log
