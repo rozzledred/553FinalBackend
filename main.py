@@ -53,13 +53,16 @@ def get_mem_info():
     time_stamp = current_time.timestamp()
     date_time = str(datetime.fromtimestamp(time_stamp))
 
-    mem_usage_percent = psutil.virtual_memory()[2]
-    mem_usage = psutil.virtual_memory()[3]
+    memory_info = psutil.virtual_memory()
+
     data = {
         "timestamp": date_time,
-        "mem_usage_percent": mem_usage_percent,
-        "mem_usage": get_size(mem_usage)
+        "current_memory_used": get_size(memory_info.used),
+        "current_memory_free": get_size(memory_info.available),
+        "memory_usage_percent": memory_info.percent,
+        "total_available_memory": get_size(memory_info.total),
     }
+
     response = app.response_class(response=json.dumps(data),
                                   status=200,
                                   mimetype='application/json')
@@ -73,12 +76,39 @@ def get_disk_info():
     date_time = str(datetime.fromtimestamp(time_stamp))
 
     disk_stats = psutil.disk_usage('/')
+    total_disk_counters = psutil.disk_io_counters(perdisk=False)
+    disk_counters = psutil.disk_io_counters(perdisk=True)
+    disk_partitions = psutil.disk_partitions()
+
+    partition_list = []
+    for item in disk_partitions:
+        part_dict = dict()
+        part_dict['device'] = item.device
+        part_dict['mount_point'] = item.mountpoint
+        partition_list.append(part_dict)
+
+    counter_list = []
+    for disk in disk_counters.keys():
+        part_dict = dict()
+        part_dict['device'] = disk
+        part_dict['read_count'] = disk_counters[disk].read_count
+        part_dict['write_count'] = disk_counters[disk].write_count
+        part_dict['bytes_read'] = get_size(disk_counters[disk].read_bytes)
+        part_dict['bytes_written'] = get_size(disk_counters[disk].write_bytes)
+        counter_list.append(part_dict)
+
     data = {
         "timestamp": date_time,
         "total_disk_usage": get_size(disk_stats[0]),
         "used_disk_usage": get_size(disk_stats[1]),
         "free_disk_usage": get_size(disk_stats[2]),
-        "percent_disk_usage": disk_stats[3]
+        "percent_disk_usage": disk_stats[3],
+        "disk_num_reads": total_disk_counters.read_count,
+        "disk_num_writes": total_disk_counters.write_count,
+        "disk_read_bytes": get_size(total_disk_counters.read_bytes),
+        "disk_write_bytes": get_size(total_disk_counters.write_bytes),
+        "disk_partitions": partition_list,
+        "disk_statistics": counter_list,
     }
     response = app.response_class(response=json.dumps(data),
                                   status=200,
