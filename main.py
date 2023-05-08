@@ -1,17 +1,20 @@
 import configparser
 import json
-import os
 from datetime import datetime
-
-import dateutil.parser
+import socket
+import os
+import re
+import time
+import shutil
+from threading import Timer, Thread
 import psutil
 from file_read_backwards import FileReadBackwards
 from flask import Flask, request, current_app
+from flask_cors import CORS
 from ping3 import ping
+from contextlib import redirect_stdout
 
 app = Flask(__name__)
-
-from dateutil.parser import parse
 
 
 def get_size(num_bytes):
@@ -34,6 +37,7 @@ def get_cpu_info():
     last_boot = datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S")
 
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "cpu_count": cpu_count,
         "avg_cpu_load": cpu_load_avg,
@@ -56,6 +60,7 @@ def get_mem_info():
     memory_info = psutil.virtual_memory()
 
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "current_memory_used": get_size(memory_info.used),
         "current_memory_free": get_size(memory_info.available),
@@ -98,6 +103,7 @@ def get_disk_info():
         counter_list.append(part_dict)
 
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "total_disk_usage": get_size(disk_stats[0]),
         "used_disk_usage": get_size(disk_stats[1]),
@@ -178,6 +184,7 @@ def get_network_info():
         current_user_list.append(current_user_dict)
 
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "avg_latency": avg_latency,
         "nic_data": nic_list,
@@ -196,6 +203,11 @@ def get_process_info():
     time_stamp = current_time.timestamp()
     date_time = str(datetime.fromtimestamp(time_stamp))
 
+    process_list_length = 10
+
+    if request.args.get("length"):
+        process_list_length = request.args.get("length")
+
     process_iterator = psutil.process_iter(['pid', 'name', 'username', 'cpu_percent'])
     process_list = []
     for process in process_iterator:
@@ -205,8 +217,9 @@ def get_process_info():
         process_list.append(pinfo)
 
     sorted_process_list = sorted(process_list, key=lambda process_object: process_object['cpu_time'], reverse=True)
-    sorted_process_list = sorted_process_list[:10]
+    sorted_process_list = sorted_process_list[:process_list_length]
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "process_list": sorted_process_list
     }
@@ -254,6 +267,7 @@ def post_logs_info():
         log_list.append(curr_log_dict)
 
     data = {
+        "host": socket.gethostname(),
         "timestamp": date_time,
         "config_paths": log_list
     }
@@ -264,13 +278,88 @@ def post_logs_info():
     return response
 
 
+def run_lt_pipe(port: int, subdomain: str = None):
+    if not shutil.which('lt'):
+        os.system('npm install -g localtunnel')
+    command = f'lt -p {port}'
+    if subdomain != None:
+        subdomain = subdomain.strip()
+        subdomain = subdomain.replace('.', '-')
+        subdomain = subdomain.replace(' ', '-')
+        if re.match(r"^[\w-]+$", subdomain):
+            command += f' -s {subdomain.lower()}'
+    output = os.system(command + "> file.txt")
+    return output
+
+
+def run_lt(port: int, subdomain: str = None):
+    if not shutil.which('lt'):
+        os.system('npm install -g localtunnel')
+    command = f'lt -p {port}'
+    if subdomain != None:
+        subdomain = subdomain.strip()
+        subdomain = subdomain.replace('.', '-')
+        subdomain = subdomain.replace(' ', '-')
+        if re.match(r"^[\w-]+$", subdomain):
+            command += f' -s {subdomain.lower()}'
+    output = os.system(command)
+    return output
+
+
+def start_lt(port: int, subdomain: str = None):
+    lt_adress = run_lt(port, subdomain)
+    print(lt_adress)
+
+
+def run_with_lt(app, subdomain: str = None):
+    old_run = app.run
+
+    def new_run(*args, **kwargs):
+        port = kwargs.get('port', 5000)
+        thread = Timer(1, start_lt, args=(port, subdomain,))
+        thread.setDaemon(True)
+        thread.start()
+        old_run(*args, **kwargs)
+
+    app.run = new_run
+
+
+def find_url(output_file_path):
+    while not os.path.exists(output_file_path):
+        time.sleep(0.1)
+
+    while os.path.getsize(output_file_path) <= 0:
+        time.sleep(0.1)
+    output_file = open(output_file_path, "r")
+    text = output_file.read()
+    url_regex = re.compile(r'https?://\S+')
+    match = url_regex.search(text)
+    if match:
+        url = match.group()
+        os.remove(output_file_path)
+        print(url)
+        return url
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
     parser = ArgumentParser()
     parser.add_argument('-config', required=True)
+    parser.add_argument('-port', required=True)
     args = parser.parse_args()
     file_path = args.config
+    port = 5000
+    if args.port:
+        port = args.port
 
     app.config["file_path"] = file_path
-    app.run(host='0.0.0.0', port=5000)
+    run_with_lt(app)
+    CORS(app)
+
+    url_send = False
+    if url_send:
+        thread = Thread(target=find_url, args=("file.txt",))
+        thread.start()
+
+    app.run(host='0.0.0.0', port=port)
