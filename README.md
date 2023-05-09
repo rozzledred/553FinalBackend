@@ -1,6 +1,6 @@
 # 553FinalBackend
 
-This is a client-side back-end monitoring application written in Python using the Flask framework It utilizes the psutil library along with other metrics libraries to gather system data, and use HTTP GET requests to send them in the form of JSON response bodies.
+This is a client-side back-end monitoring application written in Python using the Flask framework. It utilizes the psutil library along with other metrics libraries to gather system data, and use HTTP GET requests to send them in the form of JSON response bodies.
 
 The steps to setup the application are as follows:
 1) After cloning the repo, cd into the folder and run this command: 'sudo docker image build -t flask_docker .'
